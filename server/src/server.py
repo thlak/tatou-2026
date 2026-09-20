@@ -22,7 +22,7 @@ except Exception:  # dill is optional
 
 import watermarking_utils as WMUtils
 from watermarking_method import WatermarkingMethod
-#from watermarking_utils import METHODS, apply_watermark, read_watermark, explore_pdf, is_watermarking_applicable, get_method
+from watermarking_utils import METHODS, apply_watermark, read_watermark, explore_pdf, is_watermarking_applicable, get_method
 
 def create_app():
     app = Flask(__name__)
@@ -617,7 +617,6 @@ def create_app():
 
         # link token = sha1(watermarked_file_name)
         link_token = hashlib.sha1(candidate.encode("utf-8")).hexdigest()
-
         try:
             with get_engine().begin() as conn:
                 conn.execute(
@@ -767,49 +766,69 @@ def create_app():
         # lookup the document; FIXME enforce ownership
         try:
             with get_engine().connect() as conn:
-                row = conn.execute(
+                # row = conn.execute(
+                #     text("""
+                #         SELECT id, name, path
+                #         FROM Documents
+                #         WHERE id = :id
+                #     """),
+                #     {"id": doc_id},
+                # ).first()
+
+                # INSERT INTO Versions (documentid, link, intended_for, secret, method, position, path)
+                
+                rows = conn.execute(
                     text("""
-                        SELECT id, name, path
-                        FROM Documents
-                        WHERE id = :id
+                        SELECT *
+                        FROM Versions
+                        WHERE documentid = :id AND method = :method
                     """),
-                    {"id": doc_id},
-                ).first()
+                    {"id": doc_id, "method": method},
+                )
+
         except Exception as e:
             return jsonify({"error": f"database error: {str(e)}"}), 503
 
-        if not row:
+        allrows = rows.fetchall()
+
+        if not allrows:
             return jsonify({"error": "document not found"}), 404
 
-        # resolve path safely under STORAGE_DIR
-        storage_root = Path(app.config["STORAGE_DIR"]).resolve()
-        file_path = Path(row.path)
-        if not file_path.is_absolute():
-            file_path = storage_root / file_path
-        file_path = file_path.resolve()
-        try:
-            file_path.relative_to(storage_root)
-        except ValueError:
-            return jsonify({"error": "document path invalid"}), 500
-        if not file_path.exists():
-            return jsonify({"error": "file missing on disk"}), 410
-        
-        secret = None
-        try:
-            secret = WMUtils.read_watermark(
-                method=method,
-                pdf=str(file_path),
-                key=key
-            )
-        except Exception as e:
-            return jsonify({"error": f"Error when attempting to read watermark: {e}"}), 400
-        return jsonify({
-            "documentid": doc_id,
-            "secret": secret,
-            "method": method,
-            "position": position
-        }), 201
+        ## iterate through the versions
+        for v in allrows:
+            
+            path = v[7]
+            secret = v[4]
 
+            # resolve path safely under STORAGE_DIR
+            storage_root = Path(app.config["STORAGE_DIR"]).resolve()
+            file_path = Path(path)
+            if not file_path.is_absolute():
+                file_path = storage_root / file_path
+            file_path = file_path.resolve()
+            try:
+                file_path.relative_to(storage_root)
+            except ValueError:
+                return jsonify({"error": "document path invalid"}), 500
+            if not file_path.exists():
+                return jsonify({"error": "file missing on disk"}), 410
+            
+            try:
+                cur_secret = WMUtils.read_watermark(method, str(file_path), key)
+            except ValueError as e:   # whatever the real types are
+                continue
+
+            if (cur_secret == secret):
+                ## we found the right document
+                return jsonify({
+                    "documentid": doc_id,
+                    "secret": secret,
+                    "method": method,
+                    "position": position
+                }), 201
+
+        ## if we reached here then key could not read the watermark 
+        return jsonify({"error": "no matching watermark found for the given key"}), 404
     return app
     
 
