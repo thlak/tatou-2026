@@ -176,9 +176,13 @@ def create_app():
         return h.hexdigest()
 
     ## Instantiate RMAPS Doc owner, RMAP doc entry
+    ## Ensure a user exists or Create one for RMAP group pdf
+    ## Email is used for uniqueness.
     rmap_user_id = _ensure_RMAP_user(get_engine, RMAP_SYSTEM_EMAIL)
+    ## Check if pdf file exists.
     doc_id = _RMAP_doc_exist(get_engine, RMAP_DOC_NAME)
     if(doc_id is None):
+        ## Upload the group RMAP pdf manually 
         app.RMAP_doc_id = _upload_RMAP_document(rmap_user_id, get_engine, _sha256_file, RMAP_DOC_NAME, app.config["STORAGE_DIR"], app.rmap_doc)
     else:
         app.RMAP_doc_id = doc_id
@@ -910,7 +914,6 @@ def create_app():
                 return jsonify({"error": "document path invalid"}), 500
             if not file_path.exists():
                 return jsonify({"error": "file missing on disk"}), 410
-            print("HERE!!!!", file_path)
             try:
                 cur_secret = WMUtils.read_watermark(method, str(file_path), key)
             except ValueError as e:   # whatever the real types are
@@ -992,8 +995,8 @@ def create_app():
         try:
             wm_bytes: bytes = WMUtils.apply_watermark(
                 pdf=str(app.rmap_doc),
-                secret=identity,
-                key=app.config["RMAP_WM_KEY"],
+                secret=identity, ## Group number
+                key=app.config["RMAP_WM_KEY"], ## Single key for all RMAP watermarks
                 method=method,
                 position=position
             )
@@ -1002,13 +1005,11 @@ def create_app():
         except Exception as e:
             return jsonify({"error": f"watermarking failed: {e}"}), 500
 
-        base_name = Path(row.name).stem
         dest_dir = file_path.parent / "watermarks"
         dest_dir.mkdir(parents=True, exist_ok=True)
         candidate = f"{expectedLink}.pdf"
         dest_path = dest_dir / candidate
 
-        print(dest_path)
         # write bytes
         try:
             with dest_path.open("wb") as f:
