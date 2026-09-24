@@ -26,6 +26,9 @@ import base64
 import hashlib
 import hmac
 import json
+import pymupdf as pymupdf
+
+from pymupdf import TextWriter
 
 from watermarking_method import (
     InvalidKeyError,
@@ -34,7 +37,6 @@ from watermarking_method import (
     WatermarkingMethod,
     load_pdf_bytes,
 )
-
 
 class MyWatermarkingMethod(WatermarkingMethod):
     """Toy method that appends a watermark record after the PDF EOF.
@@ -48,7 +50,7 @@ class MyWatermarkingMethod(WatermarkingMethod):
         <base64url(JSON payload)>\n
     The JSON payload schema (version 1):
 
-    ``{"v":1,"alg":"HMAC-SHA256","mac":"<hex>","secret":"<b64>"}``
+    ``{"v":1,"alg":"HMAC-SHA256","mac":"<hex>","secret":"<b64>"}``water
 
     The MAC is computed over ``b"wm:add-after-eof:v1:" + secret_bytes``
     using the caller-provided ``key`` (UTF‑8) and HMAC‑SHA256.
@@ -80,23 +82,19 @@ class MyWatermarkingMethod(WatermarkingMethod):
         The ``position`` parameter is accepted for API compatibility but
         ignored by this method.
         """
-        data = load_pdf_bytes(pdf)
-        if not secret:
-            raise ValueError("Secret must be a non-empty string")
-        if not isinstance(key, str) or not key:
-            raise ValueError("Key must be a non-empty string")
+        # data = load_pdf_bytes(pdf)
+        # if not secret:
+        #     raise ValueError("Secret must be a non-empty string")
+        # if not isinstance(key, str) or not key:
+        #     raise ValueError("Key must be a non-empty string")
 
+        doc = pymupdf.open(pdf)
         payload = self._build_payload(secret, key)
-
-        # Append after the last EOF marker; if none is found (rare in
-        # malformed PDFs), we still append at the end, since most parsers
-        # will stop at the first '%%EOF' they encounter.
-        # We do not alter the original bytes to preserve determinism and
-        # avoid invalidating existing xref tables.
-        out = data
-        if not out.endswith(b"\n"):
-            out += b"\n"
-        out += self._MAGIC + payload + b"\n"
+        page = doc[0]
+        payload_ascii = '<mwm:' + payload.decode("ascii") + 'mwm>'
+        page.insert_text(point=pymupdf.Point(70,400), text=payload_ascii, render_mode=3, rotate=0, fontsize=4)
+        out = doc.tobytes()
+        doc.close()
         return out
 
     def get_payload(self, secret: str, key: str) -> bytes:
@@ -117,19 +115,29 @@ class MyWatermarkingMethod(WatermarkingMethod):
         found or is malformed. Raises :class:`InvalidKeyError` if the MAC
         does not validate under the given key.
         """
-        data = load_pdf_bytes(pdf)
-        if not isinstance(key, str) or not key:
-            raise ValueError("Key must be a non-empty string")
+        doc = pymupdf.open(pdf)
 
-        idx = data.rfind(self._MAGIC)
-        if idx == -1:
-            raise SecretNotFoundError("No MyWatermark watermark found")
+        # data = doc.tobytes()
 
-        start = idx + len(self._MAGIC)
-        # Payload ends at the next newline or EOF
-        end_nl = data.find(b"\n", start)
-        end = len(data) if end_nl == -1 else end_nl
-        b64_payload = data[start:end].strip()
+        # if not isinstance(key, str) or not key:
+        #     raise ValueError("Key must be a non-empty string")
+
+        # idx = data.rfind(self._MAGIC)
+        # if idx == -1:
+        #     raise SecretNotFoundError("No MyWatermark watermark found")
+
+        # start = idx + len(self._MAGIC)
+        # # Payload ends at the next newline or EOF
+        # end_nl = data.find(b"\n", start)
+        # end = len(data) if end_nl == -1 else end_nl
+        # b64_payload = data[start:end].strip()
+
+        for page in doc:
+            text = page.get_text()
+            try:
+                b64_payload = text.split("<mwm:", 1)[1].split("mwm>", 1)[0]
+            except IndexError:
+                raise ValueError("no watermark found")
         if not b64_payload:
             raise SecretNotFoundError("Found marker but empty payload")
 

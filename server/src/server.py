@@ -19,10 +19,89 @@ try:
 except Exception:  # dill is optional
     _pickle = _std_pickle
 
-
+from rmap import RMAPServer , RMAPError
+from rmap.crypto import decrypt_json
+import pymupdf as pymupdf
 import watermarking_utils as WMUtils
 from watermarking_method import WatermarkingMethod
 from watermarking_utils import METHODS, apply_watermark, read_watermark, explore_pdf, is_watermarking_applicable, get_method
+import secrets
+import shutil
+
+def _ensure_RMAP_user(get_engine, rmap_system_email):
+    with get_engine().begin() as conn:
+        row = conn.execute(
+            text("SELECT id FROM Users WHERE email = :email"),
+            {"email": rmap_system_email},
+        ).first()
+
+        if row is not None:
+            ## use rexists
+            ## return id
+            return row[0]
+
+        pw_hash = generate_password_hash(secrets.token_urlsafe(32))
+        result = conn.execute(
+            text("INSERT INTO Users (email, hpassword, login) VALUES (:email, :hpassword, :login)"),
+            {"email": rmap_system_email, "hpassword": pw_hash, "login": "rmap_system"},
+        )
+        return result.lastrowid                
+
+def _RMAP_doc_exist(get_engine, rmap_doc_name):
+        """
+        Return the RMAP source document's id if it's already registered
+        for the given system owner, else None.
+        """
+
+        with get_engine().begin() as conn:
+            row = conn.execute(
+                text(
+                "SELECT id " \
+                "FROM Documents " \
+                "WHERE name = :name"),
+                {"name": rmap_doc_name},
+            ).first()
+            return row[0] if row is not None else None
+    
+def _upload_RMAP_document(rmap_owner_id ,get_engine, _sha256_file, rmap_doc_name, storage_dir, rmap_doc_path):
+    """
+    Helper method to upload RMAP pdf to database
+    Documents table.
+    """
+    
+    try:
+        with get_engine().begin() as conn:
+            fname = rmap_doc_name
+            user_dir = storage_dir / "files" / "rmap_system"
+            user_dir.mkdir(parents=True, exist_ok=True)
+    
+            ts = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
+            # final_name = request.form.get("name") or fname
+            stored_name = f"{ts}__{fname}"
+            stored_path = user_dir / stored_name
+            shutil.copy(rmap_doc_path, stored_path)
+    
+            sha_hex = _sha256_file(stored_path)
+            size = stored_path.stat().st_size
+            
+            conn.execute(
+                text("""
+                    INSERT INTO Documents (name, path, ownerid, sha256, size)
+                    VALUES (:name, :path, :ownerid, UNHEX(:sha256hex), :size)
+                """),
+                {
+                    "name": fname,
+                    "path": str(stored_path),
+                    "ownerid": rmap_owner_id,
+                    "sha256hex": sha_hex,
+                    "size": int(size),
+                },
+            )
+
+            did = int(conn.execute(text("SELECT LAST_INSERT_ID()")).scalar())
+            return did
+    except Exception as e:
+        return jsonify({"error": f"database error: {str(e)}"}), 503
 
 def create_app():
     app = Flask(__name__)
@@ -37,9 +116,20 @@ def create_app():
     app.config["DB_HOST"] = os.environ.get("DB_HOST", "db")
     app.config["DB_PORT"] = int(os.environ.get("DB_PORT", "3306"))
     app.config["DB_NAME"] = os.environ.get("DB_NAME", "tatou")
-
+    app.config["RMAP_WM_KEY"] = os.environ.get("RMAP_WM_KEY", "change-me")
+    ## RMAP ##
     app.config["STORAGE_DIR"].mkdir(parents=True, exist_ok=True)
-
+    app.clients_dir = "/app/pgp_keys/clients_dir/"
+    app.rmap_doc = "/app/rmap_doc/__rmap_source__.pdf"
+    RMAP_DOC_NAME = "__rmap_source__.pdf"
+    RMAP_SYSTEM_EMAIL = "rmap-system@rmap.local"
+    app.rmap = RMAPServer(
+        "/app/pgp_keys/server_pub.asc",
+        "/app/pgp_keys/server_priv.asc",
+        linkPrefix="",
+        verbose=False,
+    )
+    app.rmap.loadIdentities(app.clients_dir)
     # --- DB engine only (no Table metadata) ---
     def db_url() -> str:
         return (
@@ -85,6 +175,14 @@ def create_app():
                 h.update(chunk)
         return h.hexdigest()
 
+    ## Instantiate RMAPS Doc owner, RMAP doc entry
+    rmap_user_id = _ensure_RMAP_user(get_engine, RMAP_SYSTEM_EMAIL)
+    doc_id = _RMAP_doc_exist(get_engine, RMAP_DOC_NAME)
+    if(doc_id is None):
+        app.RMAP_doc_id = _upload_RMAP_document(rmap_user_id, get_engine, _sha256_file, RMAP_DOC_NAME, app.config["STORAGE_DIR"], app.rmap_doc)
+    else:
+        app.RMAP_doc_id = doc_id
+        
     # --- Routes ---
     
     @app.route("/<path:filename>")
@@ -812,7 +910,7 @@ def create_app():
                 return jsonify({"error": "document path invalid"}), 500
             if not file_path.exists():
                 return jsonify({"error": "file missing on disk"}), 410
-            
+            print("HERE!!!!", file_path)
             try:
                 cur_secret = WMUtils.read_watermark(method, str(file_path), key)
             except ValueError as e:   # whatever the real types are
@@ -829,6 +927,123 @@ def create_app():
 
         ## if we reached here then key could not read the watermark 
         return jsonify({"error": "no matching watermark found for the given key"}), 404
+
+    
+    # RMAP ENDPOINTS
+    @app.post("/api/rmap-initiate")
+    def rmap_initiate():
+        """
+        Accepts an RMAP Message 1 (encrypted payload), validates
+        the identity against the course-provided client public keys, and returns Response 1
+        (encrypted to that identity).
+        """
+        identity, resp1 = app.rmap.receiveMsg1(request.get_json())
+        return resp1
+
+    @app.post("/api/rmap-get-link")
+    def rmap_get_link():
+        """
+        Accepts an RMAP Message 2 (encrypted payload). On success,
+        returns a JSON object containing a link to this pdf, watermarked with your best
+        technique. 
+        
+        The link should be made from the RMAP session secret. Before responding
+        with a link, you should create the watermarked version of a PDF and update your
+        database with a corresponding entry.
+
+        The link is formed by concatenating the two nonces as hexadecimal:
+        hex(nonceClient) ∥ hex(nonceServer), each zero-padded to 16 hex characters (the nonces
+        are 64-bit values), for 32 hex characters in total
+        """
+
+        identity, expectedLink, resp2 = app.rmap.receiveMsg2(request.get_json())
+        method = "MyWatermarkingMethod"
+        position = None
+
+        # lookup the document; enforce ownership
+        try:
+            with get_engine().connect() as conn:
+                row = conn.execute(
+                    text("""
+                        SELECT id, name, path
+                        FROM Documents
+                        WHERE id = :id
+                        LIMIT 1
+                    """),
+                    {"id": app.RMAP_doc_id},
+                ).first()
+        except Exception as e:
+            return jsonify({"error": f"database error: {str(e)}"}), 503
+
+        # check watermark applicability
+        try:
+            applicable = WMUtils.is_watermarking_applicable(
+                method=method,
+                pdf=str(app.rmap_doc),
+                position=position
+            )
+            if applicable is False:
+                return jsonify({"error": "watermarking method not applicable"}), 400
+        except Exception as e:
+            return jsonify({"error": f"watermark applicability check failed: {e}"}), 400
+
+        file_path = Path(row.path)
+        # apply watermark → bytes
+        try:
+            wm_bytes: bytes = WMUtils.apply_watermark(
+                pdf=str(app.rmap_doc),
+                secret=identity,
+                key=app.config["RMAP_WM_KEY"],
+                method=method,
+                position=position
+            )
+            if not isinstance(wm_bytes, (bytes, bytearray)) or len(wm_bytes) == 0:
+                return jsonify({"error": "watermarking produced no output"}), 500
+        except Exception as e:
+            return jsonify({"error": f"watermarking failed: {e}"}), 500
+
+        base_name = Path(row.name).stem
+        dest_dir = file_path.parent / "watermarks"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        candidate = f"{expectedLink}.pdf"
+        dest_path = dest_dir / candidate
+
+        print(dest_path)
+        # write bytes
+        try:
+            with dest_path.open("wb") as f:
+                f.write(wm_bytes)
+        except Exception as e:
+            return jsonify({"error": f"failed to write watermarked file: {e}"}), 500
+
+        try:
+            with get_engine().begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO Versions (documentid, link, intended_for, secret, method, position, path)
+                        VALUES (:documentid, :link, :intended_for, :secret, :method, :position, :path)
+                    """),
+                    {
+                        "documentid": app.RMAP_doc_id,
+                        "link": expectedLink,
+                        "intended_for": identity,
+                        "secret": identity,
+                        "method": method,
+                        "position": position or "",
+                        "path": dest_path
+                    },
+                )
+
+                return resp2
+            
+        except Exception as e:
+            # best-effort cleanup if DB insert fails
+            try:
+                dest_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return jsonify({"error": f"database error during version insert: {e}"}), 503
+        
     return app
     
 
