@@ -13,6 +13,10 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+## Error handling
+from werkzeug.exceptions import HTTPException
+from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
+
 import pickle as _std_pickle
 try:
     import dill as _pickle  # allows loading classes not importable by module path
@@ -130,6 +134,7 @@ def create_app():
         verbose=False,
     )
     app.rmap.loadIdentities(app.clients_dir)
+    DUMMY_HASH = generate_password_hash("dummy")
     # --- DB engine only (no Table metadata) ---
     def db_url() -> str:
         return (
@@ -232,8 +237,6 @@ def create_app():
                 ).one()
         except IntegrityError:
             return jsonify({"error": "email or login already exists"}), 409
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
 
         return jsonify({"id": row.id, "email": row.email, "login": row.login}), 201
 
@@ -253,9 +256,15 @@ def create_app():
                     {"email": email},
                 ).first()
         except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+            app.logger.error("create-user db error: %s", e)
+            return jsonify({"error": "service unavailable"}), 503
 
-        if not row or not check_password_hash(row.hpassword, password):
+        if row:
+            ok = check_password_hash(row.hpassword, password)
+        else:
+            check_password_hash(DUMMY_HASH, password)
+            ok = False
+        if not ok:
             return jsonify({"error": "invalid credentials"}), 401
 
         token = _serializer().dumps({"uid": int(row.id), "login": row.login, "email": row.email})
@@ -271,7 +280,9 @@ def create_app():
         if not file or file.filename == "":
             return jsonify({"error": "empty filename"}), 400
 
-        fname = file.filename
+        fname = secure_filename(file.filename)
+        if not fname:
+            return jsonify({"error": "invalid filename"}), 400
 
         user_dir = app.config["STORAGE_DIR"] / "files" / g.user["login"]
         user_dir.mkdir(parents=True, exist_ok=True)
@@ -279,38 +290,39 @@ def create_app():
         ts = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
         final_name = request.form.get("name") or fname
         stored_name = f"{ts}__{fname}"
-        stored_path = user_dir / stored_name
+        stored_path = (user_dir / stored_name).resolve()
+        if not stored_path.is_relative_to(user_dir.resolve()):
+            return jsonify({"error": "invalid path"}), 400
+            
         file.save(stored_path)
 
         sha_hex = _sha256_file(stored_path)
         size = stored_path.stat().st_size
 
-        try:
-            with get_engine().begin() as conn:
-                conn.execute(
-                    text("""
-                        INSERT INTO Documents (name, path, ownerid, sha256, size)
-                        VALUES (:name, :path, :ownerid, UNHEX(:sha256hex), :size)
-                    """),
-                    {
-                        "name": final_name,
-                        "path": str(stored_path),
-                        "ownerid": int(g.user["id"]),
-                        "sha256hex": sha_hex,
-                        "size": int(size),
-                    },
-                )
-                did = int(conn.execute(text("SELECT LAST_INSERT_ID()")).scalar())
-                row = conn.execute(
-                    text("""
-                        SELECT id, name, creation, HEX(sha256) AS sha256_hex, size
-                        FROM Documents
-                        WHERE id = :id
-                    """),
-                    {"id": did},
-                ).one()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        # try:
+        with get_engine().begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO Documents (name, path, ownerid, sha256, size)
+                    VALUES (:name, :path, :ownerid, UNHEX(:sha256hex), :size)
+                """),
+                {
+                    "name": final_name,
+                    "path": str(stored_path),
+                    "ownerid": int(g.user["id"]),
+                    "sha256hex": sha_hex,
+                    "size": int(size),
+                },
+            )
+            did = int(conn.execute(text("SELECT LAST_INSERT_ID()")).scalar())
+            row = conn.execute(
+                text("""
+                    SELECT id, name, creation, HEX(sha256) AS sha256_hex, size
+                    FROM Documents
+                    WHERE id = :id
+                """),
+                {"id": did},
+            ).one()
 
         return jsonify({
             "id": int(row.id),
@@ -324,19 +336,17 @@ def create_app():
     @app.get("/api/list-documents")
     @require_auth
     def list_documents():
-        try:
-            with get_engine().connect() as conn:
-                rows = conn.execute(
-                    text("""
-                        SELECT id, name, creation, HEX(sha256) AS sha256_hex, size
-                        FROM Documents
-                        WHERE ownerid = :uid
-                        ORDER BY creation DESC
-                    """),
-                    {"uid": int(g.user["id"])},
-                ).all()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        # try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT id, name, creation, HEX(sha256) AS sha256_hex, size
+                    FROM Documents
+                    WHERE ownerid = :uid
+                    ORDER BY creation DESC
+                """),
+                {"uid": int(g.user["id"])},
+            ).all()
 
         docs = [{
             "id": int(r.id),
@@ -362,20 +372,17 @@ def create_app():
             except (TypeError, ValueError):
                 return jsonify({"error": "document id required"}), 400
         
-        try:
-            with get_engine().connect() as conn:
-                rows = conn.execute(
-                    text("""
-                        SELECT v.id, v.documentid, v.link, v.intended_for, v.secret, v.method
-                        FROM Users u
-                        JOIN Documents d ON d.ownerid = u.id
-                        JOIN Versions v ON d.id = v.documentid
-                        WHERE u.login = :glogin AND d.id = :did
-                    """),
-                    {"glogin": str(g.user["login"]), "did": document_id},
-                ).all()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT v.id, v.documentid, v.link, v.intended_for, v.secret, v.method
+                    FROM Users u
+                    JOIN Documents d ON d.ownerid = u.id
+                    JOIN Versions v ON d.id = v.documentid
+                    WHERE u.login = :glogin AND d.id = :did
+                """),
+                {"glogin": str(g.user["login"]), "did": document_id},
+            ).all()
 
         versions = [{
             "id": int(r.id),
@@ -392,20 +399,17 @@ def create_app():
     @app.get("/api/list-all-versions")
     @require_auth
     def list_all_versions():
-        try:
-            with get_engine().connect() as conn:
-                rows = conn.execute(
-                    text("""
-                        SELECT v.id, v.documentid, v.link, v.intended_for, v.method
-                        FROM Users u
-                        JOIN Documents d ON d.ownerid = u.id
-                        JOIN Versions v ON d.id = v.documentid
-                        WHERE u.login = :glogin
-                    """),
-                    {"glogin": str(g.user["login"])},
-                ).all()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT v.id, v.documentid, v.link, v.intended_for, v.method
+                    FROM Users u
+                    JOIN Documents d ON d.ownerid = u.id
+                    JOIN Versions v ON d.id = v.documentid
+                    WHERE u.login = :glogin
+                """),
+                {"glogin": str(g.user["login"])},
+            ).all()
 
         versions = [{
             "id": int(r.id),
@@ -430,19 +434,16 @@ def create_app():
             except (TypeError, ValueError):
                 return jsonify({"error": "document id required"}), 400
         
-        try:
-            with get_engine().connect() as conn:
-                row = conn.execute(
-                    text("""
-                        SELECT id, name, path, HEX(sha256) AS sha256_hex, size
-                        FROM Documents
-                        WHERE id = :id AND ownerid = :uid
-                        LIMIT 1
-                    """),
-                    {"id": document_id, "uid": int(g.user["id"])},
-                ).first()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT id, name, path, HEX(sha256) AS sha256_hex, size
+                    FROM Documents
+                    WHERE id = :id AND ownerid = :uid
+                    LIMIT 1
+                """),
+                {"id": document_id, "uid": int(g.user["id"])},
+            ).first()
 
         # Don’t leak whether a doc exists for another user
         if not row:
@@ -481,19 +482,16 @@ def create_app():
     @app.get("/api/get-version/<link>")
     def get_version(link: str):
         
-        try:
-            with get_engine().connect() as conn:
-                row = conn.execute(
-                    text("""
-                        SELECT *
-                        FROM Versions
-                        WHERE link = :link
-                        LIMIT 1
-                    """),
-                    {"link": link},
-                ).first()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT *
+                    FROM Versions
+                    WHERE link = :link
+                    LIMIT 1
+                """),
+                {"link": link},
+            ).first()
 
         # Don’t leak whether a doc exists for another user
         if not row:
@@ -546,6 +544,7 @@ def create_app():
     # DELETE /api/delete-document  (and variants)
     @app.route("/api/delete-document", methods=["DELETE", "POST"])  # POST supported for convenience
     @app.route("/api/delete-document/<document_id>", methods=["DELETE"])
+    @require_auth
     def delete_document(document_id: int | None = None):
         # accept id from path, query (?id= / ?documentid=), or JSON body on POST
         if not document_id:
@@ -560,12 +559,11 @@ def create_app():
             return jsonify({"error": "document id required"}), 400
 
         # Fetch the document (enforce ownership)
-        try:
-            with get_engine().connect() as conn:
-                query = "SELECT * FROM Documents WHERE id = " + doc_id
-                row = conn.execute(text(query)).first()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM Documents WHERE id = :id AND ownerid = :uid"),
+                {"id": doc_id, "uid": int(g.user["id"])},
+            ).first()
 
         if not row:
             # Don’t reveal others’ docs—just say not found
@@ -593,14 +591,14 @@ def create_app():
             app.logger.error("Path safety check failed for doc id=%s: %s", row.id, e)
 
         # Delete DB row (will cascade to Version if FK has ON DELETE CASCADE)
-        try:
-            with get_engine().begin() as conn:
-                # If your schema does NOT have ON DELETE CASCADE on Version.documentid,
-                # uncomment the next line first:
-                # conn.execute(text("DELETE FROM Version WHERE documentid = :id"), {"id": doc_id})
-                conn.execute(text("DELETE FROM Documents WHERE id = :id"), {"id": doc_id})
-        except Exception as e:
-            return jsonify({"error": f"database error during delete: {str(e)}"}), 503
+        with get_engine().begin() as conn:
+            # If your schema does NOT have ON DELETE CASCADE on Version.documentid,
+            # uncomment the next line first:
+            # conn.execute(text("DELETE FROM Version WHERE documentid = :id"), {"id": doc_id})
+            conn.execute(
+                text("DELETE FROM Documents WHERE id = :id AND ownerid = :uid"),
+                {"id": doc_id, "uid": int(g.user["id"])},
+            )
 
         return jsonify({
             "deleted": True,
@@ -645,19 +643,19 @@ def create_app():
             return jsonify({"error": "method, intended_for, secret, and key are required"}), 400
 
         # lookup the document; enforce ownership
-        try:
-            with get_engine().connect() as conn:
-                row = conn.execute(
-                    text("""
-                        SELECT id, name, path
-                        FROM Documents
-                        WHERE id = :id
-                        LIMIT 1
-                    """),
-                    {"id": doc_id},
-                ).first()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        # try:
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT id, name, path
+                    FROM Documents
+                    WHERE id = :id
+                    LIMIT 1
+                """),
+                {"id": doc_id},
+            ).first()
+        # except Exception as e:
+        #     return jsonify({"error": f"database error: {str(e)}"}), 503
 
         if not row:
             return jsonify({"error": "document not found"}), 404
@@ -846,10 +844,6 @@ def create_app():
                 or request.args.get("documentid")
                 or (request.is_json and (request.get_json(silent=True) or {}).get("id"))
             )
-        try:
-            doc_id = document_id
-        except (TypeError, ValueError):
-            return jsonify({"error": "document id required"}), 400
             
         payload = request.get_json(silent=True) or {}
         # allow a couple of aliases for convenience
@@ -857,50 +851,42 @@ def create_app():
         position = payload.get("position") or None
         key = payload.get("key")
 
-        # validate input
-        try:
-            doc_id = int(doc_id)
-        except (TypeError, ValueError):
-            return jsonify({"error": "document_id (int) is required"}), 400
+        # doc_id is optional; if provided it must be a valid int
+        doc_id = None
+        if document_id is not None:
+            try:
+                doc_id = int(document_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "document id must be an integer"}), 400
         if not method or not isinstance(key, str):
             return jsonify({"error": "method, and key are required"}), 400
 
-        # lookup the document; FIXME enforce ownership
-        try:
-            with get_engine().connect() as conn:
-                # row = conn.execute(
-                #     text("""
-                #         SELECT id, name, path
-                #         FROM Documents
-                #         WHERE id = :id
-                #     """),
-                #     {"id": doc_id},
-                # ).first()
-
-                # INSERT INTO Versions (documentid, link, intended_for, secret, method, position, path)
-                
-                rows = conn.execute(
-                    text("""
-                        SELECT *
-                        FROM Versions
-                        WHERE documentid = :id AND method = :method
-                    """),
-                    {"id": doc_id, "method": method},
-                )
-
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
-
-        allrows = rows.fetchall()
+        # lookup the document; enforce ownership
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT v.documentid, v.path, v.secret, v.intended_for
+                    FROM Versions v
+                    JOIN Documents d ON d.id = v.documentid
+                    WHERE d.ownerid = :uid
+                    AND v.method = :method
+                    AND (:id IS NULL OR v.documentid = :id)
+                """),
+                {"uid": int(g.user["id"]), "method": method, "id": doc_id},
+            )
+            allrows = rows.fetchall()
 
         if not allrows:
-            return jsonify({"error": "document not found"}), 404
+            return jsonify({"error": "no versions found"}), 404
 
+        matches = []
+        
         ## iterate through the versions
+        ## append all the versions for which that key works
         for v in allrows:
             
-            path = v[7]
-            secret = v[4]
+            path = v.path
+            secret = v.secret
 
             # resolve path safely under STORAGE_DIR
             storage_root = Path(app.config["STORAGE_DIR"]).resolve()
@@ -916,20 +902,22 @@ def create_app():
                 return jsonify({"error": "file missing on disk"}), 410
             try:
                 cur_secret = WMUtils.read_watermark(method, str(file_path), key)
-            except ValueError as e:   # whatever the real types are
+            except ValueError as e:   
                 continue
 
-            if (cur_secret == secret):
-                ## we found the right document
-                return jsonify({
-                    "documentid": doc_id,
+            if cur_secret == secret:
+                matches.append({
+                    "documentid": int(v.documentid),
                     "secret": secret,
+                    "intended_for": v.intended_for,
                     "method": method,
-                    "position": position
-                }), 201
+                    "position": position,
+                })
 
-        ## if we reached here then key could not read the watermark 
-        return jsonify({"error": "no matching watermark found for the given key"}), 404
+        if not matches:
+            return jsonify({"error": "no matching watermark found for the given key"}), 404
+
+        return jsonify({"versions": matches}), 200
 
     
     # RMAP ENDPOINTS
@@ -964,19 +952,22 @@ def create_app():
         position = None
 
         # lookup the document; enforce ownership
-        try:
-            with get_engine().connect() as conn:
-                row = conn.execute(
-                    text("""
-                        SELECT id, name, path
-                        FROM Documents
-                        WHERE id = :id
-                        LIMIT 1
-                    """),
-                    {"id": app.RMAP_doc_id},
-                ).first()
-        except Exception as e:
-            return jsonify({"error": f"database error: {str(e)}"}), 503
+        # try:
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT id, name, path
+                    FROM Documents
+                    WHERE id = :id
+                    LIMIT 1
+                """),
+                {"id": app.RMAP_doc_id},
+            ).first()
+        if not row:
+            app.logger.error("rmap source document missing: id=%s", app.RMAP_doc_id)
+            return jsonify({"error": "internal error"}), 500
+        # except Exception as e:
+        #     return jsonify({"error": f"database error: {str(e)}"}), 503
 
         # check watermark applicability
         try:
@@ -988,22 +979,20 @@ def create_app():
             if applicable is False:
                 return jsonify({"error": "watermarking method not applicable"}), 400
         except Exception as e:
-            return jsonify({"error": f"watermark applicability check failed: {e}"}), 400
+            app.logger.error("rmap applicability check failed: %s", e)
+            return jsonify({"error": "watermarking method not applicable"}), 400
 
         file_path = Path(row.path)
         # apply watermark → bytes
-        try:
-            wm_bytes: bytes = WMUtils.apply_watermark(
-                pdf=str(app.rmap_doc),
-                secret=identity, ## Group number
-                key=app.config["RMAP_WM_KEY"], ## Single key for all RMAP watermarks
-                method=method,
-                position=position
-            )
-            if not isinstance(wm_bytes, (bytes, bytearray)) or len(wm_bytes) == 0:
-                return jsonify({"error": "watermarking produced no output"}), 500
-        except Exception as e:
-            return jsonify({"error": f"watermarking failed: {e}"}), 500
+        wm_bytes: bytes = WMUtils.apply_watermark(
+            pdf=str(app.rmap_doc),
+            secret=identity, ## Group number
+            key=app.config["RMAP_WM_KEY"], ## Single key for all RMAP watermarks
+            method=method,
+            position=position
+        )
+        if not isinstance(wm_bytes, (bytes, bytearray)) or len(wm_bytes) == 0:
+            return jsonify({"error": "internal error"}), 500
 
         dest_dir = file_path.parent / "watermarks"
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1011,11 +1000,8 @@ def create_app():
         dest_path = dest_dir / candidate
 
         # write bytes
-        try:
-            with dest_path.open("wb") as f:
-                f.write(wm_bytes)
-        except Exception as e:
-            return jsonify({"error": f"failed to write watermarked file: {e}"}), 500
+        with dest_path.open("wb") as f:
+            f.write(wm_bytes)
 
         try:
             with get_engine().begin() as conn:
@@ -1044,7 +1030,25 @@ def create_app():
             except Exception:
                 pass
             return jsonify({"error": f"database error during version insert: {e}"}), 503
-        
+
+    # Let normal HTTP responses pass through untouched.
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(e):
+        return jsonify({"error": e.description}), e.code
+
+    # DB connectivity, operational failures: 503, detail logged only.
+    @app.errorhandler(OperationalError)
+    @app.errorhandler(DBAPIError)
+    def handle_db_error(e):
+        app.logger.error("database error: %s", e)
+        return jsonify({"error": "service unavailable"}), 503
+
+    # Anything else unexpected: 500, full traceback to server logs only.
+    @app.errorhandler(Exception)
+    def handle_unexpected(e):
+        app.logger.exception("unhandled error")
+        return jsonify({"error": "internal error"}), 500
+    
     return app
     
 
