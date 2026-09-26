@@ -132,14 +132,16 @@ class MyWatermarkingMethod(WatermarkingMethod):
         # end = len(data) if end_nl == -1 else end_nl
         # b64_payload = data[start:end].strip()
 
+        # allows for multi page pdfs
+        b64_payload = None
         for page in doc:
             text = page.get_text()
-            try:
+            if "<mwm:" in text and "mwm>" in text:
                 b64_payload = text.split("<mwm:", 1)[1].split("mwm>", 1)[0]
-            except IndexError:
-                raise ValueError("no watermark found")
+                break
+
         if not b64_payload:
-            raise SecretNotFoundError("Found marker but empty payload")
+            raise SecretNotFoundError("No watermark marker found")
 
         try:
             payload_json = base64.urlsafe_b64decode(b64_payload)

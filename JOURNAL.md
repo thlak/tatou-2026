@@ -265,7 +265,7 @@ Invisible-text carrier using PyMuPDF `render_mode=3`. Payload built with
 Extraction reads `page.get_text()` and slices between the delimiters. Works
 end-to-end through the live API with no changes to the existing
 `create-watermark` / `read-watermark` contract. It also allows for direct
-one to one mapping to the correct owner in case of a leak. 
+one to one mapping to the correct owner in case of a leak and multi page pdfs.
 
 **Phase II note:** invisible text alone is weak against de-watermarking
 (re-render, `pdftotext` rebuild, flatten, recompression all strip it). The

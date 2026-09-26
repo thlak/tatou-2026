@@ -902,9 +902,9 @@ def create_app():
                 return jsonify({"error": "file missing on disk"}), 410
             try:
                 cur_secret = WMUtils.read_watermark(method, str(file_path), key)
-            except ValueError as e:   
+            except Exception:   
                 continue
-
+            print(cur_secret, secret)
             if cur_secret == secret:
                 matches.append({
                     "documentid": int(v.documentid),
