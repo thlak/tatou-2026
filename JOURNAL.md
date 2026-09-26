@@ -1,4 +1,4 @@
-# Tatou — Journal of Events
+# Tatou : Journal of Events
 
 Phase I /
 Group: 29 /
@@ -36,7 +36,7 @@ the write side (`cat && printf`), one on the read side (`sed`).
 **How it was exfiltrated:** the attacker submitted a watermark secret like
 `"; cat /app/flag; printf "`. The injected command wrote the flag bytes into
 the generated PDF, after the `%%EOF` marker. The flag did **not** come back in
-the HTTP response to the write request — stdout there was discarded. It rode
+the HTTP response to the write request : stdout there was discarded. It rode
 out in the stored output file, fetched afterwards through
 `GET /api/get-version/<id>`, which returns raw file bytes. I confirmed this
 myself with `curl ... | tail -c 500` and managed to recreate the attack and 
@@ -78,7 +78,7 @@ centralized error handlers in `create_app`:
 Kept only the local `except` blocks that do real work (e.g. `IntegrityError`:
 409, or file cleanup on failure). New endpoints are covered automatically.
 
-### 2.2 SQL injection — `delete-document`
+### 2.2 SQL injection : `delete-document`
 
 The document lookup built its query by concatenation:
 `"SELECT * FROM Documents WHERE id = " + doc_id`. `text()` gives no protection
@@ -92,7 +92,7 @@ and cast the id to `int` before use.
 The version shipped with Tatou had several issues:
 
 - **No ownership check.** The lookup was `SELECT ... FROM Documents WHERE id = :id`
-  with no owner filter — the code even carried a `FIXME enforce ownership`. Any
+  with no owner filter : the code even carried a `FIXME enforce ownership`. Any
   authenticated user could read the watermark of any document by passing its id.
   This is a broken-authorization (IDOR) vulnerability.
 - **Read from the wrong table.** It read the watermark from the source
@@ -107,7 +107,7 @@ The version shipped with Tatou had several issues:
 - **Information disclosure.** Rewritten around what the endpoint is actually for: **given a key and a method,
   find which of my stored versions that key unlocks.**
 
-#### First revision — what I fixed, and what I still got wrong (Commit on the 20th of September)
+#### First revision : what I fixed, and what I still got wrong (Commit on the 20th of September)
 
 My first commit already improved on the inherited code, but it wasn't right yet.
 
@@ -122,7 +122,7 @@ My first commit already improved on the inherited code, but it wasn't right yet.
 **What was still wrong:**
 
 - **No ownership check.** The query was `SELECT * FROM Versions WHERE documentid
-  = :id AND method = :method` — still no owner filter. Any authenticated user
+  = :id AND method = :method` still no owner filter. Any authenticated user
   could read another user's watermark secrets by iterating document ids. The
   `FIXME enforce ownership` was still unaddressed.
 - **Positional column access.** Used hardcoded indices (`v[7]` for path, `v[4]`
@@ -195,16 +195,16 @@ elsewhere. Same class as the flag 1 read-side risk, on the write side.
 
 Checked these and found them already correct. No change needed.
 
-- **`get-document`** — owner filter (`AND ownerid = :uid`) and path confinement
+- **`get-document`** : owner filter (`AND ownerid = :uid`) and path confinement
   already present. Used as the reference pattern for the fixes above.
-- **`get-version/<link>`** — public by design (recipient download route). Path
+- **`get-version/<link>`** : public by design (recipient download route). Path
   confinement present. The flag 1 file rode out through here, but the hole was
   upstream (the injection writing the file), not this route.
-- **`list-documents`, `list-versions`, `list-all-versions`** — all correctly
+- **`list-documents`, `list-versions`, `list-all-versions`** : all correctly
   scoped to the authenticated user through the join / owner filter. The name
   "list-all-versions" is misleading; it returns all versions belonging to the
   caller, not globally.
-- **`static/<path:filename>`** — public catch-all. Tested by hand for
+- **`static/<path:filename>`** : public catch-all. Tested by hand for
   traversal: `curl --path-as-is` with raw `../`, `%2e%2e%2f` encoded, and
   double-encoded payloads. All returned 404; only legitimate assets returned
   200. Static folder is `/app/src/static` and contains only public assets
@@ -216,14 +216,14 @@ Checked these and found them already correct. No change needed.
 
 Found these, decided they were low priority for a solo team this phase.
 
-- **Login has no rate limiting** — brute-force exposure. Deferred; offense was
+- **Login has no rate limiting** : brute-force exposure. Deferred; offense was
   not a factor this phase and a correct implementation needs more time than it
   was worth now.
-- **`create-user` has no password policy** — a 1-character password is
+- **`create-user` has no password policy** : a 1-character password is
   accepted.
 - **`delete-document` `note` field** still returns some file-deletion error
   detail to the client. Minor leak, owner-only. Deferred.
-- **Orphaned version files** — deleting a document cascades to the version rows
+- **Orphaned version files** : deleting a document cascades to the version rows
   in the DB (FK `ON DELETE CASCADE`) but does not remove the watermarked PDFs
   on disk. Disk-hygiene gap, not a security issue.
 
@@ -251,7 +251,7 @@ library.
   committed, only then return `resp2`. A link is never returned unless the
   watermarked version was actually created and recorded.
 - On DB insert failure the written file is cleaned up (no file without a row).
-- Error messages hardened — this endpoint is adversary-facing in Phase II, so
+- Error messages hardened : this endpoint is adversary-facing in Phase II, so
   it must not leak watermarking internals.
 - PGP key handling: server private key exported from the keyring, passphrase
   removed, keys mounted read-only from outside the repo and gitignored.
