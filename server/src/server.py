@@ -705,7 +705,7 @@ def create_app():
         dest_dir = file_path.parent / "watermarks"
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        candidate = f"{base_name}__{intended_slug}.pdf"
+        candidate = f"{base_name}__{intended_slug}__{secrets.token_hex(6)}.pdf"
         dest_path = dest_dir / candidate
 
         # write bytes
@@ -716,7 +716,7 @@ def create_app():
             return jsonify({"error": f"failed to write watermarked file: {e}"}), 500
 
         # link token = sha1(watermarked_file_name)
-        link_token = hashlib.sha1(candidate.encode("utf-8")).hexdigest()
+        link_token = secrets.token_hex(20)
         try:
             with get_engine().begin() as conn:
                 conn.execute(
@@ -876,47 +876,99 @@ def create_app():
             )
             allrows = rows.fetchall()
 
-        if not allrows:
-            return jsonify({"error": "no versions found"}), 404
-
         matches = []
         
         ## iterate through the versions
         ## append all the versions for which that key works
-        for v in allrows:
-            
-            path = v.path
-            secret = v.secret
+        if allrows:
+            for v in allrows:
+                
+                path = v.path
+                secret = v.secret
 
-            # resolve path safely under STORAGE_DIR
+                # resolve path safely under STORAGE_DIR
+                storage_root = Path(app.config["STORAGE_DIR"]).resolve()
+                file_path = Path(path)
+                if not file_path.is_absolute():
+                    file_path = storage_root / file_path
+                file_path = file_path.resolve()
+                try:
+                    file_path.relative_to(storage_root)
+                except ValueError:
+                    return jsonify({"error": "document path invalid"}), 500
+                if not file_path.exists():
+                    return jsonify({"error": "file missing on disk"}), 410
+                try:
+                    cur_secret = WMUtils.read_watermark(method, str(file_path), key)
+                except Exception:   
+                    continue
+                if cur_secret == secret:
+                    matches.append({
+                        "documentid": int(v.documentid),
+                        "secret": secret,
+                        "intended_for": v.intended_for,
+                        "method": method,
+                        "position": position,
+                    })
+        else:
+            ## if there are no versions for that pdf
+            ## might be a new pdf that user wants to 
+            ## find the secret of
+            try:
+                with get_engine().connect() as conn:
+                    doc = conn.execute(
+                        text("SELECT id, path FROM Documents WHERE id = :id AND ownerid = :uid"),
+                        {"id": int(doc_id), "uid": int(g.user["id"])},
+                    ).first()
+            except Exception:
+                app.logger.exception("read-watermark: document lookup failed")
+                return jsonify({"error": "internal error"}), 500
+            if doc is None:
+                return jsonify({"error": "document not found"}), 404
+
+            ## resolve path safely inside storage
             storage_root = Path(app.config["STORAGE_DIR"]).resolve()
-            file_path = Path(path)
+            file_path = Path(doc.path)
             if not file_path.is_absolute():
                 file_path = storage_root / file_path
             file_path = file_path.resolve()
-            try:
-                file_path.relative_to(storage_root)
-            except ValueError:
-                return jsonify({"error": "document path invalid"}), 500
-            if not file_path.exists():
-                return jsonify({"error": "file missing on disk"}), 410
-            try:
-                cur_secret = WMUtils.read_watermark(method, str(file_path), key)
-            except Exception:   
-                continue
-            print(cur_secret, secret)
-            if cur_secret == secret:
-                matches.append({
-                    "documentid": int(v.documentid),
-                    "secret": secret,
-                    "intended_for": v.intended_for,
-                    "method": method,
-                    "position": position,
-                })
+            if storage_root not in file_path.parents or not file_path.is_file():
+                return jsonify({"error": "document file unavailable"}), 404
 
-        if not matches:
+            ## extract from the PDF bytes themselves
+            try:
+                secret = WMUtils.read_watermark(method=method, pdf=file_path, key=key)
+            except Exception:
+                app.logger.info("read-watermark: extraction failed doc=%s method=%s", doc.id, method)
+                return jsonify({"error": "no watermark found for this method/key"}), 400
+            if not secret:
+                return jsonify({"error": "no watermark found for this method/key"}), 400
+
+            ## which version/recipient carries this secret
+            intended_for = None
+            with get_engine().connect() as conn:
+                v = conn.execute(
+                    text("""
+                        SELECT v.intended_for, v.documentid
+                        FROM Versions v JOIN Documents d ON d.id = v.documentid
+                        WHERE d.ownerid = :uid AND v.method = :method AND v.secret = :secret
+                        LIMIT 1
+                    """),
+                    {"uid": int(g.user["id"]), "method": method, "secret": secret},
+                ).first()
+                if v:
+                    intended_for = v.intended_for
+
+            matches.append({
+                "documentid": doc.id,
+                "method": method,
+                "secret": secret,
+                "intended_for": intended_for,
+            }), 200
+
+        if not matches:    
             return jsonify({"error": "no matching watermark found for the given key"}), 404
-
+        
         return jsonify({"versions": matches}), 200
 
     
