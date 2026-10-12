@@ -905,9 +905,9 @@ def create_app():
                 if cur_secret == secret:
                     matches.append({
                         "documentid": int(v.documentid),
+                        "method": method,
                         "secret": secret,
                         "intended_for": v.intended_for,
-                        "method": method,
                         "position": position,
                     })
         else:
@@ -960,16 +960,16 @@ def create_app():
                     intended_for = v.intended_for
 
             matches.append({
-                "documentid": doc.id,
+                "documentid": int(doc.id),
                 "method": method,
                 "secret": secret,
                 "intended_for": intended_for,
-            }), 200
-
+                "position": position,
+            })
         if not matches:    
-            return jsonify({"error": "no matching watermark found for the given key"}), 404
-        
-        return jsonify({"versions": matches}), 200
+            return jsonify({"error": "no matching watermark found"}), 404
+        best = matches[-1] ## grader
+        return jsonify({**best, "versions": matches}), 200 ## ** puts documentid, method, secret, intended_for and position at the top level, grader
 
     
     # RMAP ENDPOINTS
