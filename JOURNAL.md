@@ -333,11 +333,20 @@ server-side before that claim is accurate.
 ## 8. Incident: IDOR in `POST /api/create-watermark` — flag 3 captured (15 October)
 
 **Detection:** The course tester reported “server lists no version unknown
-locally” for its documents (IDs 590, 594, 598, 600). The `Versions` table
-contained versions 107–140 with `intended_for` set to
-`Ihnkndardav@gmail.com_toy-eof_neo` and method `toy-eof`, attached to documents
-owned by IDs 532, 545, 556, 562, 577, 578, 590, 593, and 602. These included
-the tester's documents and our `__rmap_source__.pdf`.
+locally” for its documents (IDs 590, 594, 598, 600). Querying `Versions` and
+grouping `intended_for` by distinct document owners (legitimate users only
+watermark their own documents) revealed two automated patterns, both using
+method `toy-eof`:
+
+- One random identity per run, `<random 11 letters>@gmail.com_toy-eof_neo`.
+  At least eight identities appeared, including `Ihnkndardav`, `Tftgjcmzgri`,
+  `Suhkymgjvry`, and `Tawuhsrznhf`. Their versions (IDs approximately 16–266)
+  spanned up to nine owners per identity, including the tester's documents and
+  our `__rmap_source__.pdf`.
+- Identities of the form `<x|p><random digits><document id>` appeared in 71
+  versions (IDs 293–363). The “p” run swept document IDs 529–672 sequentially;
+  the “x” run hit six documents twice. This may have been a different tool or
+  group.
 
 **Root cause:** `create-watermark` authenticated the caller but looked up the
 document using `WHERE id = :id` without checking ownership. Any logged-in user
@@ -355,15 +364,37 @@ caused the tester's integrity checks to fail.
 `.../20261007T105316383008Z__x.pdf`), so path traversal did not succeed and
 flag 1 was not exposed by this vector.
 
-**Response:** Preserved a database dump and server logs before making changes.
-Fixed `create-watermark` to query with
+**Response:** Fixed `create-watermark` to query with
 `WHERE id = :id AND ownerid = :uid` and return 404 when the document is absent
 or not owned by the caller, matching `get-document`. Rebuilt and redeployed
 the server container and verified the ownership check in the running
-container. Deleted the attacker-created rows with
-`DELETE FROM Versions WHERE intended_for LIKE 'Ihnkndardav%'`.
+container. Saved the attacker-created rows as evidence, then deleted both
+patterns from `Versions`. Container logs from before the fix were lost when
+the container was rebuilt. Audited the other routes taking a document ID
+(`read-watermark`, `delete-document`, `list-versions`); they enforce ownership.
+
+**Verification:** Created a separate test user and called `create-watermark`
+on another user's document (ID 590); the server returned 404, “document not
+found”. No attacker-pattern versions appear after ID 363, while legitimate
+versions continued (390+).
+
+After the fix was verified, the instructor issued a new flag 3. A new PDF was
+generated with the same structure as the original (title metadata “Flag 3”,
+one page with the heading “Flag 3” and the flag as page text) and written to
+the original document's storage path. Document 606 and its owner (Mr Important)
+are unchanged. The new flag was entered via `read -s`, was not stored in shell
+history, and is not recorded in this journal. The `sha256` and `size` columns
+were updated to match the new file, and all remaining versions of document
+606 were deleted so no copies of the old flag remain downloadable. Verified
+that the file contains the new flag, its hash and size match the database,
+document 606 has no versions, and `healthz` reports the database connected.
+The backup of the old PDF was kept outside the repository and deleted
+afterwards.
 
 **Lesson:** Authentication is not authorization; every object lookup must be
-scoped to the requesting user.
+scoped to the requesting user. Request logging will be moved to a persistent
+volume so a rebuild cannot erase evidence. A regression test will check that
+user B calling `create-watermark` on user A's document returns 404 and leaves
+A's `list-versions` unchanged.
 
 ---
