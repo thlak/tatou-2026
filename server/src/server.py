@@ -55,7 +55,7 @@ def _ensure_RMAP_user(get_engine, rmap_system_email):
         ).first()
 
         if row is not None:
-            ## use rexists
+            ## use exists
             ## return id
             return row[0]
 
@@ -664,10 +664,10 @@ def create_app():
                 text("""
                     SELECT id, name, path
                     FROM Documents
-                    WHERE id = :id
+                    WHERE id = :id AND ownerid = :uid
                     LIMIT 1
                 """),
-                {"id": doc_id},
+                {"id": doc_id, "uid": int(g.user["id"])},
             ).first()
         # except Exception as e:
         #     return jsonify({"error": f"database error: {str(e)}"}), 503

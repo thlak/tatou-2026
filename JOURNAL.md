@@ -329,3 +329,41 @@ That handler needs to return a generic client message and log the detail
 server-side before that claim is accurate.
 
 ---
+
+## 8. Incident: IDOR in `POST /api/create-watermark` — flag 3 captured (15 October)
+
+**Detection:** The course tester reported “server lists no version unknown
+locally” for its documents (IDs 590, 594, 598, 600). The `Versions` table
+contained versions 107–140 with `intended_for` set to
+`Ihnkndardav@gmail.com_toy-eof_neo` and method `toy-eof`, attached to documents
+owned by IDs 532, 545, 556, 562, 577, 578, 590, 593, and 602. These included
+the tester's documents and our `__rmap_source__.pdf`.
+
+**Root cause:** `create-watermark` authenticated the caller but looked up the
+document using `WHERE id = :id` without checking ownership. Any logged-in user
+could request a watermarked copy of another user's document and receive its
+download link. This was an IDOR / broken access control vulnerability (CWE-639).
+
+**Impact:** Version 129 was created on document 606, `flag_3`, owned by user
+578. The instructor confirmed flag 3 was captured. Foreign versions also
+caused the tester's integrity checks to fail.
+
+**Related activity (blocked):** On 2026-10-07, attacker accounts (owner IDs
+590, 593, 602) uploaded files named `../../../../../../../../app/flag` and
+`../../../etc/passwd`. The server generated stored paths inside
+`/app/storage/files/` (for example,
+`.../20261007T105316383008Z__x.pdf`), so path traversal did not succeed and
+flag 1 was not exposed by this vector.
+
+**Response:** Preserved a database dump and server logs before making changes.
+Fixed `create-watermark` to query with
+`WHERE id = :id AND ownerid = :uid` and return 404 when the document is absent
+or not owned by the caller, matching `get-document`. Rebuilt and redeployed
+the server container and verified the ownership check in the running
+container. Deleted the attacker-created rows with
+`DELETE FROM Versions WHERE intended_for LIKE 'Ihnkndardav%'`.
+
+**Lesson:** Authentication is not authorization; every object lookup must be
+scoped to the requesting user.
+
+---
