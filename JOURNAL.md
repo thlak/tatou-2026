@@ -273,3 +273,59 @@ instructions allow combining methods. Plan for Phase II is to add carriers that
 fail to different attacks so no single transformation removes all of them.
 
 ---
+
+## 7. Follow-up changes and findings (26 September–15 October)
+
+### 7.1 Randomized version filenames and download links
+
+Watermarked version filenames now include a random 12-hex-character suffix,
+and the public download link is a separate 40-hex-character value generated
+with `secrets.token_hex(20)`. This replaces deriving the link from the
+watermarked filename, making links unpredictable and avoiding filename-based
+link generation. The link remains a bearer capability: anyone who obtains it
+can download that version, as intended by the platform specification.
+
+### 7.2 Multi-page watermark extraction
+
+`MyWatermarkingMethod.read_secret` now scans PDF pages until it finds the
+watermark markers, rather than assuming they are in the first extracted page
+text. It stops at the first page with a complete marker pair and raises
+`SecretNotFoundError` if no marker is found. Watermark creation itself still
+inserts this method's payload on the first page.
+
+### 7.3 `read-watermark` handles source documents without version rows
+
+The endpoint now has a fallback for a caller-owned original document that has
+no corresponding `Versions` rows yet. When the caller supplies its document
+id, the route checks ownership, confines the source-file path to the storage
+directory, and attempts extraction directly from that PDF. If a matching
+owned version row exists, its `intended_for` value is included; otherwise
+`intended_for` is `null`.
+
+The response now includes the final match's fields at the top level as well as
+the complete `versions` array. A missing match returns a generic 404 message.
+The fallback still requires a document id; the id may be omitted when searching
+existing version rows, but without an id the route cannot select an original
+document with no versions. In that no-version case, omitting the id currently
+falls through to `int(None)` and returns a generic 500 instead of a clear 400.
+
+There is also a recipient-attribution edge case: the fallback's `intended_for`
+lookup filters by owner, method, and secret, but not by the current document
+id. If another document belonging to the same owner reuses that secret and
+method, the response can report that other version's recipient.
+
+### 7.4 RMAP input errors and remaining disclosure
+
+Both RMAP endpoints now reject requests unless the JSON body is an object with
+a string `payload`. The expected decryption, malformed-message, unknown-
+identity, and protocol-state errors are mapped to a generic 400 response rather
+than exposing their details.
+
+**Re-check / remaining issue:** the version-insert failure handler in
+`rmap-get-link` still returns `str(e)` in its 503 response. This can expose
+database or filesystem exception details, so the earlier statement in Section
+6.1 that the endpoint's errors do not leak internals is not universally true.
+That handler needs to return a generic client message and log the detail
+server-side before that claim is accurate.
+
+---
