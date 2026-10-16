@@ -1,16 +1,19 @@
 # Tatou : Journal of Events
 
-Phase I /
+Phase I–II /
 Group: 29 /
 Athanasios Lakes
 ---
 
 ## 0. Context
 
-This is a group project but unfortunately I did not manage to find avaialable groups so I had to do this on my own
+This is a group project but unfortunately I did not manage to find an available group so I had to do this on my own
 Because of that, I spent Phase I entirely on development,
 deployment, defense, and the required deliverables. I ran no offensive
 operations this phase (see Section 5).
+
+This journal now covers Phase I and Phase II (up to 17 Oct 2026); the incident
+and fix sections below are not limited to Phase I.
 
 Local access to the running server is done over
 an SSH tunnel from my laptop (`ssh -L 5001:localhost:5000 ...`), not from
@@ -21,9 +24,30 @@ and the two RMAP routes) throughout the phase, with downtime only for rebuilds.
 
 ---
 
+## Timeline
+
+| Date | Event | Type (deployment / incident / fix / flag rotation / detection) | Section |
+|------|-------|------|---------|
+| 15 Sept | Phase 0 initial deployment | deployment | - |
+| 18 Sept | Flag 1 captured via command injection | incident | §1 |
+| 20 Sept | Injection fixed, Flag 1 regenerated, and server updated | fix + flag rotation | §1 |
+| 20 Sept | First `read-watermark` revision committed | fix | §2.3 |
+| 24 Sept | RMAP endpoints merged | deployment | §6.1 |
+| 26 Sept | Final `read-watermark` revision committed | fix | §2.3 |
+| 26 Sept | Phase I deadline; Section 7 follow-up period starts | — | §7 |
+| 26 Sept | Fixes described in Section 2 | fix | §2 |
+| 5 Oct | Test bench run failed | detection | §11 |
+| 11 Oct | Flag 3 captured via ownership missing code in create-watermark method | incident | §8
+| 12–15 Oct | Follow-up fixes described in Section 7 | fix | §7 |
+| 15 Oct | Attacker accounts attempted path-traversal uploads; blocked | detection | §8 |
+| 15 Oct | IDOR detected, ownership fix deployed, attacker rows removed, and new flag 3 installed | incident + fix + flag rotation + detection | §8 |
+| 15 Oct | Test bench passed all tests | detection | §11 |
+
+---
+
 ## 1. Incident: Flag 1 captured (command injection)
 
-**When:** 18th Sept
+**When:** 18 Sept 2026
 
 **What happened:** Flag 1 (`/app/flag`, baked into the container image) was
 captured by another group.
@@ -50,7 +74,7 @@ pure-Python byte operations:
 With no shell, injected metacharacters become inert literal bytes. This kills
 the whole vulnerability class rather than trying to sanitize the input.
 
-**Response:** regenerated flags and updated the Server on the 20th of September
+**Response:** regenerated flags and updated the Server on 20 Sept 2026
 
 Output that doesn't appear in a write response can
 still leak through a stored file that a later request serves. After this I
@@ -104,10 +128,13 @@ The version shipped with Tatou had several issues:
   could not serve its intended use case.
 - **Single result only.** It returned exactly one secret. A key can unlock more
   than one version, which a single-result design can't represent.
-- **Information disclosure.** Rewritten around what the endpoint is actually for: **given a key and a method,
-  find which of my stored versions that key unlocks.**
+- **Information disclosure.** The route returned the raw exception string, as
+  described later in this section.
 
-#### First revision : what I fixed, and what I still got wrong (Commit on the 20th of September)
+Rewritten around what the endpoint is actually for: given a key and a method,
+find which of my stored versions that key unlocks.
+
+#### First revision : what I fixed, and what I still got wrong (Commit on 20 Sept 2026)
 
 My first commit already improved on the inherited code, but it wasn't right yet.
 
@@ -201,9 +228,7 @@ Checked these and found them already correct. No change needed.
   confinement present. The flag 1 file rode out through here, but the hole was
   upstream (the injection writing the file), not this route.
 - **`list-documents`, `list-versions`, `list-all-versions`** : all correctly
-  scoped to the authenticated user through the join / owner filter. The name
-  "list-all-versions" is misleading; it returns all versions belonging to the
-  caller, not globally.
+  scoped to the authenticated user through the join / owner filter. 
 - **`static/<path:filename>`** : public catch-all. Tested by hand for
   traversal: `curl --path-as-is` with raw `../`, `%2e%2e%2f` encoded, and
   double-encoded payloads. All returned 404; only legitimate assets returned
@@ -212,7 +237,7 @@ Checked these and found them already correct. No change needed.
 
 ---
 
-## 4. Known issues, deferred by triage
+## 4. Known issues, deferred by triage (Phase 1)
 
 Found these, decided they were low priority for a solo team this phase.
 
@@ -233,6 +258,8 @@ Found these, decided they were low priority for a solo team this phase.
 
 None this phase. Solo team, no time available for offense. The instructor is
 aware. Planned for Phase II if time allows.
+
+Phase II status: **[TODO]**
 
 ---
 
@@ -272,9 +299,11 @@ one to one mapping to the correct owner in case of a leak and multi page pdfs.
 instructions allow combining methods. Plan for Phase II is to add carriers that
 fail to different attacks so no single transformation removes all of them.
 
+Phase II status: **[TODO]**
+
 ---
 
-## 7. Follow-up changes and findings (26 September–15 October)
+## 7. Follow-up changes and findings (12 Oct – 15 Oct 2026)
 
 ### 7.1 Randomized version filenames and download links
 
@@ -308,11 +337,13 @@ The fallback still requires a document id; the id may be omitted when searching
 existing version rows, but without an id the route cannot select an original
 document with no versions. In that no-version case, omitting the id currently
 falls through to `int(None)` and returns a generic 500 instead of a clear 400.
+Status: fixed on 15 October
 
 There is also a recipient-attribution edge case: the fallback's `intended_for`
 lookup filters by owner, method, and secret, but not by the current document
 id. If another document belonging to the same owner reuses that secret and
 method, the response can report that other version's recipient.
+Status: fixed on 16 of October
 
 ### 7.4 RMAP input errors and remaining disclosure
 
@@ -321,16 +352,9 @@ a string `payload`. The expected decryption, malformed-message, unknown-
 identity, and protocol-state errors are mapped to a generic 400 response rather
 than exposing their details.
 
-**Re-check / remaining issue:** the version-insert failure handler in
-`rmap-get-link` still returns `str(e)` in its 503 response. This can expose
-database or filesystem exception details, so the earlier statement in Section
-6.1 that the endpoint's errors do not leak internals is not universally true.
-That handler needs to return a generic client message and log the detail
-server-side before that claim is accurate.
-
 ---
 
-## 8. Incident: IDOR in `POST /api/create-watermark` — flag 3 captured (15 October)
+## 8. Incident: IDOR in `POST /api/create-watermark` — flag 3 captured (11 Oct). Fixed (15 Oct 2026)
 
 **Detection:** The course tester reported “server lists no version unknown
 locally” for its documents (IDs 590, 594, 598, 600). Querying `Versions` and
@@ -357,7 +381,7 @@ download link. This was an IDOR / broken access control vulnerability (CWE-639).
 578. The instructor confirmed flag 3 was captured. Foreign versions also
 caused the tester's integrity checks to fail.
 
-**Related activity (blocked):** On 2026-10-07, attacker accounts (owner IDs
+**Related activity (blocked):** On 7 Oct 2026, attacker accounts (owner IDs
 590, 593, 602) uploaded files named `../../../../../../../../app/flag` and
 `../../../etc/passwd`. The server generated stored paths inside
 `/app/storage/files/` (for example,
@@ -372,6 +396,8 @@ container. Saved the attacker-created rows as evidence, then deleted both
 patterns from `Versions`. Container logs from before the fix were lost when
 the container was rebuilt. Audited the other routes taking a document ID
 (`read-watermark`, `delete-document`, `list-versions`); they enforce ownership.
+Attacker-created versions were placed on other users' documents, including the
+tester's documents; this was user data tampering.
 
 **Verification:** Created a separate test user and called `create-watermark`
 on another user's document (ID 590); the server returned 404, “document not
@@ -393,8 +419,27 @@ afterwards.
 
 **Lesson:** Authentication is not authorization; every object lookup must be
 scoped to the requesting user. Request logging will be moved to a persistent
-volume so a rebuild cannot erase evidence. A regression test will check that
-user B calling `create-watermark` on user A's document returns 404 and leaves
-A's `list-versions` unchanged.
+volume so a rebuild cannot erase evidence.
+Status: fixed on 15 of October  
+
+A regression test will check that user B calling `create-watermark` on user
+A's document returns 404 and leaves A's `list-versions` unchanged.
+Status: done on 15 of October
 
 ---
+
+## 9. Re-identification of de-watermarked copies of our document
+
+Record received copies (count/date), method used, and result per copy: **[TODO]**
+
+## 10. Watermarked PDFs collected from other groups via RMAP
+
+Record each collected PDF and its outcome:
+
+| Group | Date | Success/Failure | Notes |
+|-------|------|-----------------|-------|
+| **[TODO]** | **[TODO]** | **[TODO]** | **[TODO]** |
+
+## 11. Test bench results
+
+Record the run date, result per check, and interpretation: 15 of October all test passed.

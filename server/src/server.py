@@ -970,10 +970,10 @@ def create_app():
                     text("""
                         SELECT v.intended_for, v.documentid
                         FROM Versions v JOIN Documents d ON d.id = v.documentid
-                        WHERE d.ownerid = :uid AND v.method = :method AND v.secret = :secret
+                        WHERE d.ownerid = :uid AND v.method = :method AND v.secret = :secret AND v.documentid = :doc_id
                         LIMIT 1
                     """),
-                    {"uid": int(g.user["id"]), "method": method, "secret": secret},
+                    {"uid": int(g.user["id"]), "method": method, "secret": secret, "doc_id": doc_id},
                 ).first()
                 if v:
                     intended_for = v.intended_for
@@ -1073,6 +1073,7 @@ def create_app():
                 position=position
             )
             if not isinstance(wm_bytes, (bytes, bytearray)) or len(wm_bytes) == 0:
+                app.logger.error("wmbytes is either not instance or has no space: %s, %s", isinstance(wm_bytes, (bytes, bytearray)) ,len(wm_bytes))
                 return jsonify({"error": "internal error"}), 500
     
             dest_dir = file_path.parent / "watermarks"
