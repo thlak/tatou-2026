@@ -17,11 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.exceptions import HTTPException
 from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
-import pickle as _std_pickle
-try:
-    import dill as _pickle  # allows loading classes not importable by module path
-except Exception:  # dill is optional
-    _pickle = _std_pickle
+import re
 
 from rmap import RMAPServer , RMAPError
 from rmap.crypto import decrypt_json
@@ -236,7 +232,11 @@ def create_app():
         password = payload.get("password") or ""
         if not email or not login or not password:
             return jsonify({"error": "email, login, and password are required"}), 400
-
+        
+        # login is used as a storage directory name: allow-list only (no '.', '/', spaces)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", login):
+            return jsonify({"error": "login may only contain letters, digits, '_' and '-' (max 64)"}), 400
+        
         hpw = generate_password_hash(password)
 
         try:
@@ -774,6 +774,7 @@ def create_app():
     @app.post("/api/load-plugin")
     @require_auth
     def load_plugin():
+        return jsonify({"error": "plugin loading is disabled"}), 410
         """
         Load a serialized Python class implementing WatermarkingMethod from
         STORAGE_DIR/files/plugins/<filename>.{pkl|dill} and register it in wm_mod.METHODS.

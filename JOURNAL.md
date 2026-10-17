@@ -40,8 +40,10 @@ and the two RMAP routes) throughout the phase, with downtime only for rebuilds.
 | 11 Oct | Flag 3 captured via ownership missing code in create-watermark method | incident | §8
 | 12–15 Oct | Follow-up fixes described in Section 7 | fix | §7 |
 | 15 Oct | Attacker accounts attempted path-traversal uploads; blocked | detection | §8 |
+| 15 Oct | Test bench run succeeded | fix | §11 |
 | 15 Oct | IDOR detected, ownership fix deployed, attacker rows removed, and new flag 3 installed | incident + fix + flag rotation + detection | §8 |
-| 15 Oct | Test bench passed all tests | detection | §11 |
+| 16 Oct | Attributed some leaked PDFs to other Groups | detection | §9 |
+| 16 Oct | Collected PDFs from other groups | deployment | §10 |
 
 ---
 
@@ -299,7 +301,7 @@ one to one mapping to the correct owner in case of a leak and multi page pdfs.
 instructions allow combining methods. Plan for Phase II is to add carriers that
 fail to different attacks so no single transformation removes all of them.
 
-Phase II status: **[TODO]**
+Phase II status: Did not manage to harden the Watermarking method.
 
 ---
 
@@ -430,16 +432,61 @@ Status: done on 15 of October
 
 ## 9. Re-identification of de-watermarked copies of our document
 
-Record received copies (count/date), method used, and result per copy: **[TODO]**
+attribute_pdfs.py calls my read_secret() with the RMAP key, verifies the HMAC, and maps the secret to intended_for via an export of the Versions table. If that fails, assigns 
+Unknown.
+
+Results.
+
+File	Intended_for
+1e37be3e….pdf	Group_09
+9843df0c….pdf	Group_05
+cc274815….pdf	Group_21
+dfc7a345….pdf	Group_03
+aa20c2f9….pdf	Unknown
+b78b2361….pdf	Unknown
+
+Limitation. The invisible-text watermark doesn’t survive a full rewrite (2 of 6 copies were stripped this way). Redundant carriers would improve robustness.
 
 ## 10. Watermarked PDFs collected from other groups via RMAP
 
-Record each collected PDF and its outcome:
+Collection is done with retrieve_RMAP_docs.py, a minimal RMAP client (pgpy + stdlib only, no external HTTP library). It runs the full four-message handshake: msg1-POST /api/rmap-initiate, msg2-POST /api/rmap-get-link, authenticating as Group_29 with my server's private key and encrypting to each peer’s published public key. The link is reconstructed client-side as hex(nonceClient) ∥ hex(nonceServer) (32 hex chars) and the watermarked PDF is fetched from /api/get-version/<link>, saved as pdfs/Group_NN.pdf. Run from the VM softsec-group-29 over the internal network.
+
+Collection is bounded by subnet routing. Our VM is 10.100.11.31 in 10.100.11.0/24. Odd-numbered groups resolve into the same subnet (10.100.11.x, e.g. softsec-group-05: 10.100.11.7) and are reachable on port 5000. Even-numbered groups resolve into 10.100.10.0/24 (e.g. softsec-group-02 → 10.100.10.54): those hosts can be pinged but every TCP port (22/80/443/5000/8000) is filtered.
 
 | Group | Date | Success/Failure | Notes |
 |-------|------|-----------------|-------|
-| **[TODO]** | **[TODO]** | **[TODO]** | **[TODO]** |
+| 1 | 16/10/2026 | Success | - |
+| 2 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 3 | 16/10/2026 | Success | - |
+| 4 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 5 | 16/10/2026 | Failure | HTTP Error 400: BAD REQUEST |
+| 6 | 17/10/2026 | Failure | <urlopen error timed out> |
+| 7 | 16/10/2026 | Success | - |
+| 8 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 9 | 16/10/2026 | Success | - |
+| 10 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 11 | 16/10/2026 | Failure | HTTP Error 405: METHOD NOT ALLOWED |
+| 13 | 16/10/2026 | Success | - |
+| 14 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 15 | 16/10/2026 | Success | - |
+| 16 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 17 | 16/10/2026 | Success | - |
+| 18 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 19 | 16/10/2026 | Success | - |
+| 20 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 21 | 16/10/2026 | Success | - |
+| 22 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 23 | 16/10/2026 | Failure | No Public Key |
+| 24 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 25 | 16/10/2026 | Success | - |
+| 26 | 17/10/2026 | Failure | No public key |
+| 27 | 16/10/2026 | Success | - |
+| 28 | 17/10/2026 | Failure | No Public Key |
+| 29 | 17/10/2026 | Success | - |
+| 30 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 32 | 16/10/2026 | Timeout | <urlopen error timed out> |
+| 34 | 16/10/2026 | Timeout | <urlopen error timed out> |
 
 ## 11. Test bench results
 
-Record the run date, result per check, and interpretation: 15 of October all test passed.
+On 15 of October all test passed.
