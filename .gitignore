@@ -218,4 +218,4 @@ server_priv.asc
 
 read_wm.py
 *.tsv
-*.sql
+incident_2026-10-15.sql
