@@ -217,3 +217,5 @@ flag
 server_priv.asc
 
 read_wm.py
+*.tsv
+*.sql
