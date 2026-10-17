@@ -220,3 +220,5 @@ read_wm.py
 *.tsv
 *.sql
 logs/
+
+incident_2026-10-15.sql
