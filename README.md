@@ -1,55 +1,72 @@
 # tatou
-A web platform for pdf watermarking. This project is intended for pedagogical use, and contain security vulnerabilities. Do not deploy on an open network.
 
-## Instructions
+A web platform for PDF watermarking. This project is intended for pedagogical
+use and contains security vulnerabilities. Do not deploy on an open network.
 
-The following instructions are meant for a bash terminal on a Linux machine. If you are using something else, you will need to adapt them.
-
-To clone the repo, you can simply run:
+## Clone
 
 ```bash
-git clone https://github.com/nharrand/tatou-2026.git
+git clone https://github.com/thlak/tatou-2026.git
+cd tatou-2026
 ```
 
-Note that you should probably fork the repo and clone your own repo.
-
-
-### Run python unit tests
+## Run unit tests
 
 ```bash
-cd tatou/server
+cd server
 
-# Create a python virtual environement
 python3 -m venv .venv
-
-# Activate your virtual environement
 . .venv/bin/activate
 
-# Install the necessary dependencies
-python -m pip install -e ".[dev]"
+# install the package plus test tooling
+pip install -e .
+pip install pytest pytest-cov
 
-# Run the unit tests
+# run the unit tests
 python -m pytest
 ```
 
-### Deploy
+The watermarking suite (`test/test_watermarking_all_methods.py`) runs without a
+server. `test/test_api.py` imports the Flask app, which builds the RMAP keys and
+a DB connection at startup, so it only runs in a full deployment environment; in
+development the API is checked with the test bench and with `curl` (below).
 
-From the root of the directory:
+## Coverage analysis
 
 ```bash
-# Create a file to set environement variables like passwords.
+cd server
+PYTHONPATH=src python -m pytest \
+  --cov=my_watermarking_method --cov=watermarking_utils \
+  --cov=watermarking_method --cov=add_after_eof \
+  --cov-report=term --cov-report=html test/test_watermarking_all_methods.py
+```
+
+`--cov-report=html` writes a browsable report to `htmlcov/`. A saved summary is
+in `artifacts/atla8167/coverage-summary.txt`.
+
+## Deploy
+
+From the root of the repository:
+
+```bash
+# create the environment file
 cp sample.env .env
 
-# Edit .env and pick the passwords you want
+# edit .env: set the DB passwords, FLAG_2, and a strong SECRET_KEY.
+# generate a SECRET_KEY with:
+echo "SECRET_KEY=$(openssl rand -hex 32)" >> .env
 
-# Rebuild the docker image and deploy the containers
+# build and start the containers
 docker compose up --build -d
 
-# Monitor logs in realtime 
+# follow logs
 docker compose logs -f
 
-# Test if the API is up
-http -v :5000/healthz
-
-# Open your browser at 127.0.0.1:5000 to check if the website is up.
+# check the API is up
+curl -s localhost:5000/healthz; echo
 ```
+
+Then open `http://127.0.0.1:5000` to check the web client.
+
+Application logs (request log and security events) are written to `./logs/` on
+the host via a bind mount, so they survive container rebuilds.
