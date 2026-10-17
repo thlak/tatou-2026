@@ -7,6 +7,24 @@
 | `server/test/test_api.py` | `GET /healthz` returns 200 and JSON. |
 | `server/test/test_watermarking_all_methods.py` | Every watermarking method registered in `watermarking_utils.METHODS`, parameterised. |
 
+## Running the unit tests
+
+From the repository root, run the watermarking unit tests from `server/` with
+`src` on the module path:
+
+```bash
+cd server
+PYTHONPATH=src python -m pytest test/test_watermarking_all_methods.py
+```
+
+All 9 tests pass when run this way. Running from the repository root instead
+leaves the methods registry empty (causing the tests to skip) and makes
+`test_api.py` fail to import.
+
+`test/test_api.py` imports the full Flask app, which loads RMAP PGP keys and
+connects to a database at startup. It therefore only runs inside a full
+deployment and should be excluded from the standalone unit-test run above.
+
 ## test_watermarking_all_methods.py — per method
 
 For each registered method (the unsafe shell bridge is excluded):
@@ -23,7 +41,13 @@ depends on.
 
 ## Coverage (pytest-cov)
 
-Scoped to the watermarking code the suite targets:
+From `server/`, run coverage for the suite with:
+
+```bash
+PYTHONPATH=src python -m pytest --cov=src --cov-report=term test/test_watermarking_all_methods.py
+```
+
+The reported coverage is scoped to the `src` package:
 
 | Module | Coverage |
 |--------|----------|

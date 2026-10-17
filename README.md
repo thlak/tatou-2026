@@ -22,27 +22,27 @@ python3 -m venv .venv
 pip install -e .
 pip install pytest pytest-cov
 
-# run the unit tests
-python -m pytest
+# Run only the watermarking unit tests (all 9 tests pass)
+PYTHONPATH=src python -m pytest test/test_watermarking_all_methods.py
 ```
 
-The watermarking suite (`test/test_watermarking_all_methods.py`) runs without a
-server. `test/test_api.py` imports the Flask app, which builds the RMAP keys and
-a DB connection at startup, so it only runs in a full deployment environment; in
-development the API is checked with the test bench and with `curl` (below).
+Run the command from the `server/` directory, with `src` on `PYTHONPATH`, as
+shown above. Running pytest from the repository root leaves the watermarking
+methods registry empty (causing the tests to skip) and makes `test_api.py` fail
+to import.
+
+`test/test_api.py` imports the full Flask app, which loads RMAP PGP keys and
+connects to the database at startup. It therefore only runs inside a full
+deployment and should be excluded from the standalone unit-test run above.
 
 ## Coverage analysis
 
 ```bash
 cd server
-PYTHONPATH=src python -m pytest \
-  --cov=my_watermarking_method --cov=watermarking_utils \
-  --cov=watermarking_method --cov=add_after_eof \
-  --cov-report=term --cov-report=html test/test_watermarking_all_methods.py
+PYTHONPATH=src python -m pytest --cov=src --cov-report=term test/test_watermarking_all_methods.py
 ```
 
-`--cov-report=html` writes a browsable report to `htmlcov/`. A saved summary is
-in `artifacts/atla8167/coverage-summary.txt`.
+A saved coverage summary is in `artifacts/atla8167/coverage-summary.txt`.
 
 ## Deploy
 
@@ -52,9 +52,11 @@ From the root of the repository:
 # create the environment file
 cp sample.env .env
 
-# edit .env: set the DB passwords, FLAG_2, and a strong SECRET_KEY.
+# edit .env: set the DB passwords, FLAG_2, RMAP_WM_KEY, and a strong SECRET_KEY.
 # generate a SECRET_KEY with:
 echo "SECRET_KEY=$(openssl rand -hex 32)" >> .env
+# the app also expects RMAP_WM_KEY to be set in the environment
+# (it is read from server/src/server.py via app.config["RMAP_WM_KEY"]).
 
 # build and start the containers
 docker compose up --build -d

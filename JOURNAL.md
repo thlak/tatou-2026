@@ -44,6 +44,13 @@ and the two RMAP routes) throughout the phase, with downtime only for rebuilds.
 | 15 Oct | IDOR detected, ownership fix deployed, attacker rows removed, and new flag 3 installed | incident + fix + flag rotation + detection | §8 |
 | 16 Oct | Attributed some leaked PDFs to other Groups | detection | §9 |
 | 16 Oct | Collected PDFs from other groups | deployment | §10 |
+| 17 Oct | STRIDE threat model completed; three live issues and one exposure surfaced | detection | §12.1 |
+| 17 Oct | Default SECRET_KEY token-forgery risk fixed; key rotation invalidates tokens | fix | §12.2 |
+| 17 Oct | Login path traversal campaign confirmed; login allow-list deployed | incident + fix | §12.3 |
+| 17 Oct | Unsafe deserialization route disabled | fix | §12.4 |
+| 17 Oct | MariaDB and phpMyAdmin ports restricted to loopback | fix | §12.5 |
+| 17 Oct | Persistent access and security-event logging added and verified | fix | §12.6 |
+| 17 Oct | Watermarking tests and API, README documentation updated | fix | §12.7 |
 
 ---
 
@@ -490,3 +497,62 @@ Collection is bounded by subnet routing. Our VM is 10.100.11.31 in 10.100.11.0/2
 ## 11. Test bench results
 
 On 15 of October all test passed.
+
+## 12. Phase II operational security (Specialization D) — 17 Oct 2026
+
+### 12.1 STRIDE threat model
+
+Produced a STRIDE threat model covering the API, database, file storage, and
+flags (`artifacts/atla8167/threat-model.md`). Working through it surfaced
+three live issues not found by earlier testing and one exposure, described
+below.
+
+### 12.2 Default `SECRET_KEY` and token forgery
+
+`docker-compose.yml` did not pass `SECRET_KEY`, so the app used the public
+default `dev-secret-change-me`. Any user could forge a session token for any
+account. Verified `SECRET_KEY` was unset in the running VM container. Fixed by
+injecting it from `.env`; rotation invalidates existing tokens. Since the
+default was used for most of the project, earlier forgery cannot be ruled out;
+this was raised with the instructor (CWE-798 / CWE-287).
+
+### 12.3 Path traversal via login — confirmed exploited
+
+The login was used unvalidated as a storage directory. A Users-table query
+showed a 7 Oct traversal campaign, including `../trav1`,
+`../../templates/x/..`, `../../../../etc/apptest4`, and `Mr_Important/...`
+variants. Three uploads landed outside the user directory: `/app/storage/trav1`,
+`/etc/apptest4`, and `/app/templates`. The latter two copies were in the
+container filesystem and were lost on a later rebuild. Fixed by restricting
+login to `[A-Za-z0-9_-]{1,64}` and rejecting invalid values with 400 before
+path use; `../probe` now returns 400 (CWE-22).
+
+### 12.4 Unsafe deserialization in `load-plugin`
+
+An authenticated route called `pickle.load()` on an uploaded file, allowing
+remote code execution and a path to flag 1. The inherited route was absent
+from the API spec and untested. Disabled it with an early 410 return before
+deserialization (CWE-502).
+
+### 12.5 Exposed data plane
+
+MariaDB (3306) and phpMyAdmin (8080) were published on `0.0.0.0`. Restricted
+both bindings to `127.0.0.1`; they remain reachable through the SSH tunnel.
+Verified with `ss -tlnp`.
+
+### 12.6 Observation points and persistent logging
+
+Added `obs.py` with JSON-lines per-request access logging and security-event
+logging for `auth_failure`, `suspicious_login`, `authz_denied`, and
+`server_error`. Logs are written to `./logs`, bind-mounted to the host, so
+they survive rebuilds (addressing evidence loss during the 15 Oct IDOR
+incident). Verified both logs on the VM and confirmed importing `obs.py`
+does not create directories.
+
+### 12.7 Test and documentation pass
+
+Fixed the watermarking test fixture to create a real one-page PDF. The suite
+passes 9/9 from `server/` with `PYTHONPATH=src`. Updated `API.md` for Phase II
+behavior (ownership 404s, login allow-list, random version links, and RMAP
+error handling) and corrected README test, coverage, and deployment
+instructions.
