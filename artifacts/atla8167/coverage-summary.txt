@@ -1,0 +1,13 @@
+.........                                                                [100%]
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.11.16-final-0 _______________
+
+Name                            Stmts   Miss  Cover
+---------------------------------------------------
+src/add_after_eof.py               70     14    80%
+src/my_watermarking_method.py      68     10    85%
+src/watermarking_method.py         41      9    78%
+src/watermarking_utils.py          80     55    31%
+---------------------------------------------------
+TOTAL                             259     88    66%
+9 passed in 0.13s
