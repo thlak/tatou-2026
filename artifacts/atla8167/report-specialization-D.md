@@ -63,9 +63,8 @@ the evidence-loss gap directly.
 - A successful RCE reads a flag with no application-level log; catching that needs
   host auditing, which I did not set up given time and the solo constraint.
 - Forged tokens are invisible by design; the default key was in use for most of
-  the project, so earlier forgery cannot be ruled out (disclosed to the
-  instructor).
-- Detection is after the fact — nothing here blocks an attack in real time.
+  the project, so earlier forgery cannot be ruled out.
+- Detection is after the fact — nothing here blocks an attack in real time. Should be disclosed.
 
 Incidents are recorded in the operations journal: command injection (§1), the
 audit (§2), and the IDOR / flag 3 capture (§8). This section is the
