@@ -27,6 +27,7 @@ from watermarking_method import WatermarkingMethod
 from watermarking_utils import METHODS, apply_watermark, read_watermark, explore_pdf, is_watermarking_applicable, get_method
 import secrets
 import shutil
+import obs
 
 ## for unknown identity and unissues 
 ## nonceServer to return 400 (grader)
@@ -202,7 +203,7 @@ def create_app():
         app.RMAP_doc_id = _upload_RMAP_document(rmap_user_id, get_engine, _sha256_file, RMAP_DOC_NAME, app.config["STORAGE_DIR"], app.rmap_doc)
     else:
         app.RMAP_doc_id = doc_id
-        
+    obs.init_app(app)
     # --- Routes ---
     
     @app.route("/<path:filename>")
@@ -235,6 +236,7 @@ def create_app():
         
         # login is used as a storage directory name: allow-list only (no '.', '/', spaces)
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", login):
+            obs.log_event("suspicious_login", login=login)
             return jsonify({"error": "login may only contain letters, digits, '_' and '-' (max 64)"}), 400
         
         hpw = generate_password_hash(password)
@@ -280,6 +282,7 @@ def create_app():
             check_password_hash(DUMMY_HASH, password)
             ok = False
         if not ok:
+            obs.log_event("auth_failure", email=email)
             return jsonify({"error": "invalid credentials"}), 401
 
         token = _serializer().dumps({"uid": int(row.id), "login": row.login, "email": row.email})
@@ -673,6 +676,7 @@ def create_app():
         #     return jsonify({"error": f"database error: {str(e)}"}), 503
 
         if not row:
+            obs.log_event("authz_denied", requested_doc_id=doc_id, route="create-watermark")
             return jsonify({"error": "document not found"}), 404
 
         # resolve path safely under STORAGE_DIR
