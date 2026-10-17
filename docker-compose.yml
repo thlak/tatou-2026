@@ -7,6 +7,7 @@ services:
       - "5000:5000"
     volumes:
       - user-files:/app/storage
+      - ./logs:/app/logs
       - ../pgp_keys:/app/pgp_keys:ro
       - ../rmap_doc:/app/rmap_doc:ro
     environment:
